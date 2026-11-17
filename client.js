@@ -226,6 +226,8 @@ window.__ModuleLoader__.load({
       'player.qualityChip': '音质 {quality}',
       'player.platformChip': '{platform}',
       'player.openSettings': '去设置页换音源',
+      'player.unavailable': '播放器打不开：当前窗口没有侧栏服务（sidebarRight），请刷新界面后重试。',
+      'player.openFailed': '播放器打不开：{error}',
     }
     const EN = {
       'nav.label': 'LX source getter',
@@ -379,6 +381,8 @@ window.__ModuleLoader__.load({
       'player.qualityChip': 'Quality {quality}',
       'player.platformChip': '{platform}',
       'player.openSettings': 'Change source in settings',
+      'player.unavailable': 'The player cannot open: this window has no right-column service (sidebarRight). Refresh the interface and retry.',
+      'player.openFailed': 'The player cannot open: {error}',
     }
 
     const KNOWN_QUALITIES = ['128k', '192k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'master', '24bit']
@@ -470,6 +474,23 @@ window.__ModuleLoader__.load({
     const MUSIC_KIND = 'lx-geteer/music'
     /** Left-rail panellist entry; the same id keys its `main` panel. */
     const MUSIC_PANEL_ID = 'lx-geteer'
+    /**
+     * Resolve the right-column navigation service. Built-in plugins read it as
+     * `ctx.sidebarRight`; `get` keeps older runtimes working. Returns undefined
+     * when the window has no right column at all (no silent optional chaining
+     * at the call sites, so a missing service can be reported to the user).
+     */
+    function resolveSidebarRight(ctx) {
+      if (!ctx) return undefined
+      if (ctx.sidebarRight && typeof ctx.sidebarRight.openTab === 'function') return ctx.sidebarRight
+      if (typeof ctx.get === 'function') {
+        try {
+          const service = ctx.get('sidebarRight')
+          if (service && typeof service.openTab === 'function') return service
+        } catch { /* service not in this scope */ }
+      }
+      return undefined
+    }
     const BASE_QUALITIES = ['128k', '320k', 'flac', 'flac24bit']
     const PLAY_MODES = ['single', 'list', 'shuffle', 'sequential']
     const PLATFORM_OPTIONS = [
@@ -910,12 +931,38 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => { refresh() }, [refresh])
 
-      const openPlayer = () => {
-        const sidebar = ctx && typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined
-        if (!sidebar || typeof sidebar.openTab !== 'function') return
+      // The right column is driven by the `sidebarRight` service. Never fail
+      // silently: this button used to do nothing when the service was missing
+      // or the column refused the open, which reads as a dead button.
+      const openPlayer = async () => {
+        const face = resolveSidebarRight(ctx)
+        if (!face) {
+          setError(t('player.unavailable'))
+          return
+        }
+        let failure = null
+        for (const options of [{ revealIfOpened: true }, {}]) {
+          try {
+            await face.openTab(PLAYER_KIND, options)
+            setError('')
+            return
+          } catch (error) {
+            failure = error
+          }
+        }
+        // The seat may still be minting its store on the frame after a session
+        // switch; one delayed retry covers that race instead of swallowing it.
+        await new Promise((resolve) => setTimeout(resolve, 120))
         try {
-          sidebar.openTab(PLAYER_KIND, { revealIfOpened: true })
-        } catch { /* no on-screen session yet */ }
+          await face.openTab(PLAYER_KIND, { revealIfOpened: true })
+          setError('')
+          return
+        } catch (error) {
+          failure = error
+        }
+        setError(t('player.openFailed', {
+          error: failure && failure.message ? failure.message : String(failure),
+        }))
       }
 
       const runSearch = async () => {
@@ -948,7 +995,7 @@ window.__ModuleLoader__.load({
             platform,
           })
           if (result && result.message) setToast(result.message)
-          openPlayer()
+          await openPlayer()
         } catch (e) {
           setError(`${t('music.playError')}：${e.message}`)
         } finally {
@@ -964,7 +1011,7 @@ window.__ModuleLoader__.load({
         try {
           const result = await api('playPlaylist', { id: playlist.id, index: 0 })
           if (result && result.message) setToast(result.message)
-          openPlayer()
+          await openPlayer()
         } catch (e) {
           setError(e.message)
         } finally {
@@ -2093,6 +2140,8 @@ window.__ModuleLoader__.load({
         // player tab and the tab's own effect starts playback.
         let lastOpenedRevision = -1
         let lastPlayerRevision = -1
+        let warnedNoSidebar = false
+        let warnedOpenFailure = false
         const pollPlayer = async () => {
           let data
           try {
@@ -2107,13 +2156,24 @@ window.__ModuleLoader__.load({
             playerStore.set(player)
           }
           if (player.status !== 'ready' || !(player.revision > lastOpenedRevision)) return
-          const sidebar = ctx.get('sidebarRight')
-          if (!sidebar || typeof sidebar.openTab !== 'function') return
+          const sidebar = resolveSidebarRight(ctx)
+          if (!sidebar) {
+            if (!warnedNoSidebar) {
+              warnedNoSidebar = true
+              console.warn('[lx-geteer] sidebarRight is unavailable; the player tab cannot be opened automatically')
+            }
+            return
+          }
           try {
-            sidebar.openTab(PLAYER_KIND, { revealIfOpened: true })
+            await sidebar.openTab(PLAYER_KIND, { revealIfOpened: true })
             lastOpenedRevision = player.revision
-          } catch {
-            // No on-screen Session yet; the next poll retries.
+          } catch (error) {
+            // No on-screen Session yet; the next poll retries. Report once so a
+            // permanent wiring problem is visible instead of silent.
+            if (!warnedOpenFailure) {
+              warnedOpenFailure = true
+              console.warn('[lx-geteer] could not open the player tab:', error && error.message ? error.message : error)
+            }
           }
         }
         ctx.effect(() => {
