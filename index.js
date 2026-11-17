@@ -6,8 +6,9 @@ import { SEARCH_PROVIDERS, searchSongs, platformLabel } from './lib/search.js'
 import { DownloadJobs } from './lib/download.js'
 import { PlayerHub } from './lib/player.js'
 import { PlaylistStore } from './lib/playlist.js'
+import { installHostSafety } from './lib/safety.js'
 import {
-  VERSION, dataDir, isTrustedRequest, readJsonBody, sendJson,
+  VERSION, dataDir, isTrustedRequest, readJsonBody, sendJson, sendJsonSafe,
 } from './lib/util.js'
 
 export const inject = ['webServer']
@@ -16,6 +17,9 @@ const PACKAGE_DIR = fileURLToPath(new URL('.', import.meta.url))
 const searchablePlatforms = new Set(SEARCH_PROVIDERS.map((p) => p.platform))
 
 export function apply(ctx) {
+  // The Host exits the process on any unhandled rejection; a dropped audio
+  // socket must never cost the user their window.
+  installHostSafety()
   const store = new SourceStore(PACKAGE_DIR).load()
   const jobs = new DownloadJobs((line) => console.log('[lx-geteer]', line))
   const playerHub = new PlayerHub()
@@ -764,7 +768,7 @@ export function apply(ctx) {
         sendJson(res, 200, await handle(action, payload))
       } catch (error) {
         const message = error && error.message ? error.message : String(error)
-        sendJson(res, 400, { ok: false, error: message })
+        sendJsonSafe(res, 400, { ok: false, error: message })
       }
     },
   }), 'dsh-lx-geteer: /lx-geteer-api')
@@ -773,22 +777,43 @@ export function apply(ctx) {
     kind: 'exact',
     path: '/lx-geteer-stream',
     async handler(req, res) {
+      // A client that disconnects mid-stream emits 'error' on both sockets;
+      // without listeners Node escalates it to an uncaught exception.
+      req.on('error', () => {})
+      res.on('error', () => {})
       if (!isTrustedRequest(req)) {
-        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-        res.end('仅允许同源页面访问')
+        try {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('仅允许同源页面访问')
+        } catch {
+          /* socket already gone */
+        }
         return
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
-        res.writeHead(405, { Allow: 'GET, HEAD' })
-        res.end()
+        try {
+          res.writeHead(405, { Allow: 'GET, HEAD' })
+          res.end()
+        } catch {
+          /* socket already gone */
+        }
         return
       }
       try {
         const url = new URL(req.url || '/', 'http://localhost')
         await playerHub.stream(url.searchParams.get('id'), req, res)
       } catch (error) {
-        if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
-        res.end(`音频代理失败：${error && error.message ? error.message : String(error)}`)
+        const message = error && error.message ? error.message : String(error)
+        try {
+          if (res.destroyed) return
+          if (res.headersSent) res.destroy()
+          else {
+            res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
+            res.end(`音频代理失败：${message}`)
+          }
+        } catch {
+          /* socket already gone */
+        }
       }
     },
   }), 'dsh-lx-geteer: /lx-geteer-stream')
