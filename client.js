@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
         body: JSON.stringify({ op, ...(payload || {}) }),
       })
       const data = await res.json()
-      if (!data.ok) throw new Error(data.error || '请求失败')
+      if (!data.ok) throw new Error(data.message || data.error || '请求失败')
       return data
     }
 
@@ -174,6 +174,14 @@ window.__ModuleLoader__.load({
       'quality.title': '默认音质',
       'platform.title': '默认音源',
       'platform.hint': '点击切换默认音源（默认网易云）',
+      'music.title': '音乐',
+      'music.tabTitle': 'LX 音乐',
+      'music.guide': '搜索歌曲、播放 .lxmc 歌单',
+      'music.play': '播放',
+      'music.results': '搜索结果',
+      'music.openPlayer': '打开播放器',
+      'music.idle': '暂无播放',
+      'music.playError': '播放失败',
       'playlist.title': '歌单库',
       'playlist.import': '导入 .lxmc 歌单',
       'playlist.importing': '导入中…',
@@ -319,6 +327,14 @@ window.__ModuleLoader__.load({
       'quality.title': 'Default quality',
       'platform.title': 'Default source',
       'platform.hint': 'Click to change the default source (NetEase by default)',
+      'music.title': 'Music',
+      'music.tabTitle': 'LX Music',
+      'music.guide': 'Search songs and play .lxmc playlists',
+      'music.play': 'Play',
+      'music.results': 'Results',
+      'music.openPlayer': 'Open player',
+      'music.idle': 'Nothing playing',
+      'music.playError': 'Playback failed',
       'playlist.title': 'Playlists',
       'playlist.import': 'Import .lxmc playlist',
       'playlist.importing': 'Importing…',
@@ -450,6 +466,10 @@ window.__ModuleLoader__.load({
      * Playback: shared store, composer quality pill, right-sidebar player
      * ------------------------------------------------------------------ */
     const PLAYER_KIND = 'lx-geteer/player'
+    /** Right-sidebar tab for the music hub (search + playlists). */
+    const MUSIC_KIND = 'lx-geteer/music'
+    /** Left-rail panellist entry; the same id keys its `main` panel. */
+    const MUSIC_PANEL_ID = 'lx-geteer'
     const BASE_QUALITIES = ['128k', '320k', 'flac', 'flac24bit']
     const PLAY_MODES = ['single', 'list', 'shuffle', 'sequential']
     const PLATFORM_OPTIONS = [
@@ -843,6 +863,260 @@ window.__ModuleLoader__.load({
         ) : null,
         h('div', { style: { display: 'flex', gap: 8 } },
           h('button', { type: 'button', className: 'lxgp-btn', onClick: retry, disabled: retrying }, retrying ? t('player.retrying') : t('player.retry')),
+        ),
+      )
+    }
+
+    /* ------------------------------------------------------------------ *
+     * Music hub — shared by the left rail entry and the right-sidebar tab
+     * ------------------------------------------------------------------ */
+    function MusicRailIcon({ size = 18 }) {
+      return h(Icon, { name: 'note', size })
+    }
+
+    function MusicPage({ ctx, embedded = false }) {
+      const locale = ctx && typeof ctx.get === 'function' ? ctx.get('locale') : undefined
+      const [, bumpLocale] = React.useState(0)
+      React.useEffect(() => {
+        if (!locale || typeof locale.subscribe !== 'function') return undefined
+        return locale.subscribe(() => bumpLocale((x) => x + 1))
+      }, [locale])
+      const t = React.useCallback((key, vars) => translate(locale, key, vars), [locale, bumpLocale])
+      const player = usePlayerStore(playerStore)
+
+      const [snap, setSnap] = React.useState(null)
+      const [playlists, setPlaylists] = React.useState([])
+      const [query, setQuery] = React.useState('')
+      const [platform, setPlatform] = React.useState('wy')
+      const [results, setResults] = React.useState([])
+      const [resultsQuery, setResultsQuery] = React.useState('')
+      const [searching, setSearching] = React.useState(false)
+      const [busy, setBusy] = React.useState('')
+      const [error, setError] = React.useState('')
+      const [toast, setToast] = React.useState('')
+      const fileRef = React.useRef(null)
+
+      const refresh = React.useCallback(async () => {
+        try {
+          const data = await api('state')
+          setSnap(data)
+          setPlaylists(Array.isArray(data.playlists) ? data.playlists : [])
+          const selected = data.settings && data.settings.platform
+          if (selected) setPlatform((prev) => prev || selected)
+        } catch (e) {
+          setError(e.message)
+        }
+      }, [])
+
+      React.useEffect(() => { refresh() }, [refresh])
+
+      const openPlayer = () => {
+        const sidebar = ctx && typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined
+        if (!sidebar || typeof sidebar.openTab !== 'function') return
+        try {
+          sidebar.openTab(PLAYER_KIND, { revealIfOpened: true })
+        } catch { /* no on-screen session yet */ }
+      }
+
+      const runSearch = async () => {
+        const q = query.trim()
+        if (!q || searching) return
+        setSearching(true)
+        setError('')
+        setToast('')
+        try {
+          const data = await api('search', { platform, query: q, page: 1, limit: 20 })
+          setResults(Array.isArray(data.list) ? data.list : [])
+          setResultsQuery(q)
+        } catch (e) {
+          setError(t('search.error', { error: e.message }))
+          setResults([])
+          setResultsQuery(q)
+        } finally {
+          setSearching(false)
+        }
+      }
+
+      const playSong = async (song) => {
+        if (busy) return
+        setBusy(`song:${song.songmid || song.name}`)
+        setError('')
+        setToast('')
+        try {
+          const result = await api('play', {
+            query: `${song.name || ''} ${song.singer || ''}`.trim(),
+            platform,
+          })
+          if (result && result.message) setToast(result.message)
+          openPlayer()
+        } catch (e) {
+          setError(`${t('music.playError')}：${e.message}`)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const playList = async (playlist) => {
+        if (busy) return
+        setBusy(`pl:${playlist.id}`)
+        setError('')
+        setToast('')
+        try {
+          const result = await api('playPlaylist', { id: playlist.id, index: 0 })
+          if (result && result.message) setToast(result.message)
+          openPlayer()
+        } catch (e) {
+          setError(e.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const importPlaylist = async (file) => {
+        if (!file || busy) return
+        setBusy('import')
+        setError('')
+        setToast('')
+        try {
+          const data = bufferToBase64(await file.arrayBuffer())
+          const result = await api('importPlaylist', { data, filename: file.name })
+          const info = result && result.playlist ? result.playlist : {}
+          setToast(t('playlist.imported', { name: info.name || file.name, count: info.count || 0 }))
+          await refresh()
+        } catch (e) {
+          setError(t('playlist.error', { error: e.message }))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const providers = snap && Array.isArray(snap.providers) && snap.providers.length
+        ? snap.providers.map((item) => [item.platform, item.label])
+        : PLATFORM_OPTIONS
+      const playing = player && player.status === 'ready' && player.title
+
+      const css = h('style', null, `
+        .lxgm { display:flex; flex-direction:column; gap:12px; height:100%; overflow-y:auto; padding:18px 20px 28px; box-sizing:border-box; color:var(--dsw-alias-label-primary); font-size:13px; line-height:1.5; }
+        .lxgm * { box-sizing:border-box; }
+        .lxgm-embedded { padding:12px 12px 20px; gap:10px; }
+        .lxgm-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+        .lxgm-title { font-size:15px; font-weight:650; }
+        .lxgm-now { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--dsw-alias-border-l1); border-radius:12px; background:var(--dsw-alias-bg-layer-1); }
+        .lxgm-searchbar { display:flex; gap:8px; align-items:center; }
+        .lxgm-input { flex:1; min-width:0; height:34px; padding:0 11px; border-radius:8px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); color:inherit; font:inherit; outline:none; }
+        .lxgm-input:focus { border-color:var(--dsw-alias-brand-primary); }
+        .lxgm-select { height:34px; border-radius:8px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); color:inherit; font:inherit; padding:0 6px; }
+        .lxgm-btn { appearance:none; display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
+        .lxgm-btn:hover:not(:disabled) { background:var(--dsw-alias-bg-layer-2); }
+        .lxgm-btn:disabled { opacity:.45; cursor:not-allowed; }
+        .lxgm-btn-primary { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary); color:#fff; }
+        .lxgm-btn-sm { height:26px; padding:0 8px; font-size:11.5px; }
+        .lxgm-section { display:flex; flex-direction:column; gap:2px; }
+        .lxgm-section-head { display:flex; align-items:center; gap:8px; margin:2px 2px 4px; font-size:11.5px; color:var(--dsw-alias-label-secondary); }
+        .lxgm-row { display:flex; align-items:center; gap:10px; padding:7px 8px; border-radius:10px; }
+        .lxgm-row:hover { background:var(--dsw-alias-bg-layer-2); }
+        .lxgm-row-main { flex:1; min-width:0; }
+        .lxgm-name { font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .lxgm-sub { font-size:11px; color:var(--dsw-alias-label-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .lxgm-empty { font-size:11.5px; color:var(--dsw-alias-label-secondary); padding:6px 8px; }
+        .lxgm-error { font-size:11.5px; color:var(--dsw-alias-state-error-primary); background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); border-radius:8px; padding:7px 9px; }
+        .lxgm-toast { font-size:11.5px; color:var(--dsw-alias-state-success-primary); }
+      `)
+
+      return h('div', { className: embedded ? 'lxgm lxgm-embedded' : 'lxgm' }, css,
+        h('div', { className: 'lxgm-head' },
+          h('div', { className: 'lxgm-title' }, t('music.title')),
+          h('button', { type: 'button', className: 'lxgm-btn', onClick: openPlayer },
+            h(Icon, { name: 'note', size: 14 }),
+            t('music.openPlayer')),
+        ),
+        playing ? h('div', { className: 'lxgm-now' },
+          h('div', { className: 'lxgm-row-main' },
+            h('div', { className: 'lxgm-name' }, player.title),
+            h('div', { className: 'lxgm-sub' }, [player.singer, player.platform ? platformLabel(player.platform) : ''].filter(Boolean).join(' · ')),
+          ),
+          h('button', { type: 'button', className: 'lxgm-btn', onClick: openPlayer }, t('music.openPlayer')),
+        ) : null,
+        h('div', { className: 'lxgm-searchbar' },
+          h('select', {
+            className: 'lxgm-select',
+            value: platform,
+            onChange: (event) => setPlatform(event.target.value),
+            'aria-label': t('search.platform'),
+          }, providers.map(([key, label]) => h('option', { key, value: key }, label))),
+          h('input', {
+            className: 'lxgm-input',
+            value: query,
+            placeholder: t('search.placeholder'),
+            onChange: (event) => setQuery(event.target.value),
+            onKeyDown: (event) => { if (event.key === 'Enter') runSearch() },
+          }),
+          h('button', {
+            type: 'button',
+            className: 'lxgm-btn lxgm-btn-primary',
+            onClick: runSearch,
+            disabled: searching || !query.trim(),
+          }, searching ? t('search.searching') : t('search.button')),
+        ),
+        error ? h('div', { className: 'lxgm-error' }, error) : null,
+        toast ? h('div', { className: 'lxgm-toast' }, toast) : null,
+        h('div', { className: 'lxgm-section' },
+          h('div', { className: 'lxgm-section-head' },
+            h('span', null, t('music.results')),
+            resultsQuery ? h('span', { className: 'lxgm-sub' }, resultsQuery) : null,
+          ),
+          !resultsQuery
+            ? h('div', { className: 'lxgm-empty' }, t('search.empty'))
+            : results.length === 0
+              ? h('div', { className: 'lxgm-empty' }, t('search.noResult'))
+              : results.map((song, index) => h('div', { className: 'lxgm-row', key: `${song.songmid || song.name}-${index}` },
+                h('div', { className: 'lxgm-row-main' },
+                  h('div', { className: 'lxgm-name' }, song.name),
+                  h('div', { className: 'lxgm-sub' }, [song.singer, song.albumName].filter(Boolean).join(' · ')),
+                ),
+                h('button', {
+                  type: 'button',
+                  className: 'lxgm-btn',
+                  disabled: Boolean(busy),
+                  onClick: () => playSong(song),
+                }, busy === `song:${song.songmid || song.name}` ? t('player.loading') : t('music.play')),
+              )),
+        ),
+        h('div', { className: 'lxgm-section' },
+          h('div', { className: 'lxgm-section-head' },
+            h('span', null, t('playlist.title')),
+            h('button', {
+              type: 'button',
+              className: 'lxgm-btn lxgm-btn-sm',
+              disabled: Boolean(busy),
+              onClick: () => { if (fileRef.current) fileRef.current.click() },
+            }, t('playlist.import')),
+            h('input', {
+              ref: fileRef,
+              type: 'file',
+              accept: '.lxmc,application/octet-stream',
+              style: { display: 'none' },
+              onChange: (event) => {
+                const file = event.target.files && event.target.files[0]
+                event.target.value = ''
+                if (file) importPlaylist(file)
+              },
+            }),
+          ),
+          playlists.length === 0
+            ? h('div', { className: 'lxgm-empty' }, t('playlist.empty'))
+            : playlists.map((playlist) => h('div', { className: 'lxgm-row', key: playlist.id },
+              h('div', { className: 'lxgm-row-main' },
+                h('div', { className: 'lxgm-name' }, playlist.name),
+                h('div', { className: 'lxgm-sub' }, t('playlist.count', { count: playlist.count || 0 })),
+              ),
+              h('button', {
+                type: 'button',
+                className: 'lxgm-btn',
+                disabled: Boolean(busy),
+                onClick: () => playList(playlist),
+              }, busy === `pl:${playlist.id}` ? t('player.loading') : t('playlist.play')),
+            )),
         ),
       )
     }
@@ -1735,6 +2009,25 @@ window.__ModuleLoader__.load({
           }), 'dsh-lx-geteer: player tab type')
         }
 
+        // A second tab type: the music hub (search + playlists), reachable from
+        // the right dock's guide as well as from the left rail entry below.
+        if (tabTypes && typeof tabTypes.register === 'function') {
+          ctx.effect(() => tabTypes.register({
+            id: MUSIC_KIND,
+            kind: MUSIC_KIND,
+            priority: 'extension',
+            title: () => translate(locale, 'music.tabTitle'),
+            keepMounted: true,
+            guide: [{
+              id: 'music',
+              order: 40,
+              title: () => translate(locale, 'music.title'),
+              description: () => translate(locale, 'music.guide'),
+              icon: MusicRailIcon,
+            }],
+          }), 'dsh-lx-geteer: music tab type')
+        }
+
         slots.inject('settings.section', () => slots.register(
           { name: 'settings.section', id: 'lx-geteer', order: 32, label: () => translate(locale, 'nav.label') },
           () => h(Panel, { ctx }),
@@ -1750,6 +2043,16 @@ window.__ModuleLoader__.load({
           () => h(PlayerTitle, { ctx }),
         ))
 
+        slots.inject('sidebar.right.pane.tab', () => slots.register(
+          { name: 'sidebar.right.pane.tab', key: MUSIC_KIND },
+          () => h(MusicPage, { ctx, embedded: true }),
+        ))
+
+        slots.inject('sidebar.right.pane.tab.title', () => slots.register(
+          { name: 'sidebar.right.pane.tab.title', key: MUSIC_KIND },
+          () => h('span', { className: 'lxgp-tab-title' }, translate(locale, 'music.tabTitle')),
+        ))
+
         slots.inject('conversation.input.left', () => slots.register(
           { name: 'conversation.input.left', id: 'lx-geteer-quality', order: 6, label: () => translate(locale, 'quality.title') },
           () => h(QualityButton, { ctx }),
@@ -1759,6 +2062,32 @@ window.__ModuleLoader__.load({
           { name: 'conversation.input.left', id: 'lx-geteer-platform', order: 7, label: () => translate(locale, 'platform.title') },
           () => h(PlatformButton, { ctx }),
         ))
+
+        // Left rail entry: a panellist row plus the `main` panel it selects.
+        // Both registrations live in the page context that owns `layout`.
+        if (typeof ctx.inject === 'function') {
+          ctx.inject(['layout'], (pageCtx) => {
+            const pageSlots = pageCtx.slots
+            if (!pageSlots || typeof pageSlots.register !== 'function') return undefined
+            const stopMain = pageSlots.inject('main', () => pageSlots.register(
+              { name: 'main', key: MUSIC_PANEL_ID },
+              () => h(MusicPage, { ctx }),
+            ))
+            const stopRail = pageSlots.inject('sidebar.panellist', () => pageSlots.register(
+              {
+                name: 'sidebar.panellist',
+                id: MUSIC_PANEL_ID,
+                order: 6,
+                label: () => translate(locale, 'music.title'),
+              },
+              MusicRailIcon,
+            ))
+            return () => {
+              stopRail()
+              stopMain()
+            }
+          })
+        }
 
         // Poll the Host player state; a new ready revision opens/focuses the
         // player tab and the tab's own effect starts playback.
