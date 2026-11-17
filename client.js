@@ -175,6 +175,8 @@ window.__ModuleLoader__.load({
       'platform.title': '默认音源',
       'platform.hint': '点击切换默认音源（默认网易云）',
       'music.title': '音乐',
+      'player.play': '播放',
+      'player.pause': '暂停',
       'music.tabTitle': 'LX 音乐',
       'music.guide': '搜索歌曲、播放 .lxmc 歌单',
       'music.play': '播放',
@@ -330,6 +332,8 @@ window.__ModuleLoader__.load({
       'platform.title': 'Default source',
       'platform.hint': 'Click to change the default source (NetEase by default)',
       'music.title': 'Music',
+      'player.play': 'Play',
+      'player.pause': 'Pause',
       'music.tabTitle': 'LX Music',
       'music.guide': 'Search songs and play .lxmc playlists',
       'music.play': 'Play',
@@ -442,6 +446,10 @@ window.__ModuleLoader__.load({
       if (name === 'download') return h('svg', common, h('path', { d: 'M12 3v12' }), h('path', { d: 'm7 10 5 5 5-5' }), h('path', { d: 'M4 21h16' }))
       if (name === 'check') return h('svg', common, h('path', { d: 'm4 12 5 5L20 6' }))
       if (name === 'note') return h('svg', common, h('path', { d: 'M9 18V6l10-2v12' }), h('circle', { cx: 6, cy: 18, r: 3 }), h('circle', { cx: 16, cy: 16, r: 3 }))
+      if (name === 'play') return h('svg', common, h('path', { d: 'M8 5.5v13l11-6.5z', fill: 'currentColor', stroke: 'none' }))
+      if (name === 'pause') return h('svg', common, h('rect', { x: 8, y: 5.5, width: 3.2, height: 13, rx: 1.1, fill: 'currentColor', stroke: 'none' }), h('rect', { x: 13.4, y: 5.5, width: 3.2, height: 13, rx: 1.1, fill: 'currentColor', stroke: 'none' }))
+      if (name === 'prev') return h('svg', common, h('path', { d: 'M19 5.5v13L9.5 12z', fill: 'currentColor', stroke: 'none' }), h('rect', { x: 5, y: 5.5, width: 2.2, height: 13, rx: 1, fill: 'currentColor', stroke: 'none' }))
+      if (name === 'next') return h('svg', common, h('path', { d: 'M5 5.5v13L14.5 12z', fill: 'currentColor', stroke: 'none' }), h('rect', { x: 16.8, y: 5.5, width: 2.2, height: 13, rx: 1, fill: 'currentColor', stroke: 'none' }))
       if (name === 'refresh') return h('svg', common, h('path', { d: 'M20 11a8 8 0 1 0-2.3 5.7' }), h('path', { d: 'M20 4v7h-7' }))
       if (name === 'plus') return h('svg', common, h('path', { d: 'M12 5v14M5 12h14' }))
       if (name === 'trash') return h('svg', common, h('path', { d: 'M4 7h16' }), h('path', { d: 'M9 7V4h6v3' }), h('path', { d: 'M6 7l1 13h10l1-13' }))
@@ -684,12 +692,17 @@ window.__ModuleLoader__.load({
       const [blocked, setBlocked] = React.useState(false)
       const [mediaError, setMediaError] = React.useState('')
       const [retrying, setRetrying] = React.useState(false)
+      const [playing, setPlaying] = React.useState(false)
+      const [currentTime, setCurrentTime] = React.useState(0)
+      const [duration, setDuration] = React.useState(0)
       const token = player && player.token ? player.token : ''
       const src = token ? absAppPath(`/lx-geteer-stream?id=${encodeURIComponent(token)}`) : ''
 
       React.useEffect(() => {
         setBlocked(false)
         setMediaError('')
+        setCurrentTime(0)
+        setDuration(0)
         const audio = audioRef.current
         if (!audio || !src) return undefined
         try { audio.load() } catch { /* source will load on play */ }
@@ -772,27 +785,80 @@ window.__ModuleLoader__.load({
         audio.play().then(() => setBlocked(false)).catch((error) => setMediaError(error.message || '播放失败'))
       }
 
+      const formatTime = (value) => {
+        const total = Number(value)
+        if (!Number.isFinite(total) || total < 0) return '0:00'
+        const minutes = Math.floor(total / 60)
+        const seconds = Math.floor(total % 60)
+        return `${minutes}:${String(seconds).padStart(2, '0')}`
+      }
+
+      const togglePlay = () => {
+        const audio = audioRef.current
+        if (!audio) return
+        if (audio.paused) {
+          audio.play().then(() => setBlocked(false)).catch(() => setBlocked(true))
+        } else {
+          audio.pause()
+        }
+      }
+
+      const seekTo = (value) => {
+        const audio = audioRef.current
+        const next = Number(value)
+        if (!audio || !Number.isFinite(next)) return
+        try { audio.currentTime = next } catch { /* not seekable yet */ }
+        setCurrentTime(next)
+      }
+
+      const progressPct = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0
+
       const css = h('style', null, `
-        .lxgp { display:flex; flex-direction:column; gap:12px; padding:14px 14px 20px; color:var(--dsw-alias-label-primary); font-size:13px; line-height:1.5; box-sizing:border-box; }
+        .lxgp { position:relative; display:flex; flex-direction:column; gap:14px; padding:16px 16px 24px; color:#f4f1ff; font-size:13px; line-height:1.5; box-sizing:border-box; overflow:hidden; border-radius:18px; background:linear-gradient(180deg,#151122,#100d18 60%,#0c0a13); }
         .lxgp * { box-sizing:border-box; }
-        .lxgp-cover { width:100%; aspect-ratio:1/1; max-height:280px; border-radius:14px; overflow:hidden; background:var(--dsw-alias-bg-layer-2); display:flex; align-items:center; justify-content:center; color:var(--dsw-alias-label-secondary); }
-        .lxgp-cover img { width:100%; height:100%; object-fit:cover; display:block; }
-        .lxgp-title { font-size:17px; font-weight:650; line-height:1.35; word-break:break-word; }
-        .lxgp-sub { color:var(--dsw-alias-label-secondary); font-size:12px; margin-top:-6px; }
-        .lxgp-chips { display:flex; gap:6px; flex-wrap:wrap; }
-        .lxgp-chip { font-size:10.5px; padding:2px 7px; border-radius:999px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); }
-        .lxgp audio { width:100%; display:block; }
-        .lxgp-note { font-size:11px; color:var(--dsw-alias-label-secondary); }
-        .lxgp-skip { color:var(--dsw-alias-state-warn-primary, #d9a441); }
-        .lxgp-error { font-size:11.5px; color:var(--dsw-alias-state-error-primary); background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); border-radius:8px; padding:7px 9px; }
-        .lxgp-btn { appearance:none; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border-radius:8px; height:32px; padding:0 12px; font:inherit; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
-        .lxgp-btn:hover:not(:disabled) { background:var(--dsw-alias-bg-layer-2); }
-        .lxgp-btn:disabled { opacity:.5; cursor:not-allowed; }
-        .lxgp-btn-primary { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary); color:#fff; }
-        .lxgp-controls { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+        .lxgp-bg { position:absolute; inset:-60px; background-size:cover; background-position:center; filter:blur(30px) saturate(1.5); opacity:.32; z-index:0; pointer-events:none; }
+        .lxgp-veil { position:absolute; inset:0; z-index:0; pointer-events:none; background:
+          radial-gradient(120% 70% at 15% 0%, rgba(255,111,165,.22), transparent 62%),
+          radial-gradient(110% 70% at 90% 8%, rgba(103,232,249,.18), transparent 58%),
+          linear-gradient(180deg, rgba(12,10,20,.12), rgba(12,10,20,.72) 72%, #0c0a13); }
+        .lxgp-body { position:relative; z-index:1; display:flex; flex-direction:column; gap:13px; }
+        .lxgp-card { position:relative; width:100%; aspect-ratio:1/1; max-height:300px; border-radius:24px; overflow:hidden; background:linear-gradient(140deg,#241d3d,#141021); box-shadow:0 14px 40px rgba(0,0,0,.5), 0 0 26px rgba(255,111,165,.22), 0 0 0 1px rgba(255,255,255,.09); }
+        .lxgp-card img { width:100%; height:100%; object-fit:cover; display:block; transform:scale(1.01); transition:transform .7s ease; }
+        .lxgp-card:hover img { transform:scale(1.06); }
+        .lxgp-card::after { content:''; position:absolute; inset:0; background:linear-gradient(180deg, rgba(10,8,16,0) 52%, rgba(10,8,16,.55)); }
+        .lxgp-ring { position:absolute; inset:9px; border-radius:18px; border:1px solid rgba(255,255,255,.18); pointer-events:none; z-index:2; }
+        .lxgp-spark { position:absolute; right:14px; top:12px; z-index:3; font-size:13px; color:rgba(255,255,255,.75); text-shadow:0 0 12px rgba(255,143,192,.9); animation:lxgp-twinkle 3s ease-in-out infinite; }
+        @keyframes lxgp-twinkle { 0%,100%{ opacity:.35; transform:scale(.9) } 50%{ opacity:1; transform:scale(1.15) } }
+        .lxgp-title { font-size:19px; font-weight:750; letter-spacing:.3px; line-height:1.35; word-break:break-word; background:linear-gradient(92deg,#ffd1e3,#ff9ecb 32%,#c8b6ff 64%,#9be9f7); -webkit-background-clip:text; background-clip:text; color:transparent; }
+        .lxgp-sub { color:#b9b2d4; font-size:12px; margin-top:-7px; }
+        .lxgp-note { font-size:11px; color:#9d96b8; }
+        .lxgp-skip { color:#f0c674; }
+        .lxgp-chips { display:flex; gap:7px; flex-wrap:wrap; }
+        .lxgp-chip { font-size:10.5px; padding:3px 10px; border-radius:999px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.12); color:#e9e4fb; }
+        .lxgp-chip-a { color:#ffd9ea; border-color:rgba(255,111,165,.45); background:rgba(255,111,165,.15); }
+        .lxgp-chip-b { color:#c9f4fd; border-color:rgba(103,232,249,.42); background:rgba(103,232,249,.13); }
+        .lxgp-progress { display:flex; flex-direction:column; gap:7px; }
+        .lxgp-times { display:flex; justify-content:space-between; font-size:11px; color:#a49dc0; font-variant-numeric:tabular-nums; }
+        .lxgp-seek { -webkit-appearance:none; appearance:none; width:100%; height:6px; border-radius:999px; outline:none; cursor:pointer; background:linear-gradient(90deg,#ff6fa5 0%,#b98cff var(--lxgp-pct,0%), rgba(255,255,255,.13) var(--lxgp-pct,0%), rgba(255,255,255,.13) 100%); }
+        .lxgp-seek::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:#fff; box-shadow:0 0 12px rgba(255,111,165,.95), 0 0 0 3px rgba(255,111,165,.22); }
+        .lxgp-seek::-moz-range-thumb { width:14px; height:14px; border:0; border-radius:50%; background:#fff; box-shadow:0 0 12px rgba(255,111,165,.95), 0 0 0 3px rgba(255,111,165,.22); }
+        .lxgp-transport { display:flex; align-items:center; justify-content:center; gap:18px; padding:2px 0 2px; }
+        .lxgp-iconbtn { appearance:none; width:38px; height:38px; border-radius:50%; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06); color:#f2eeff; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; transition:transform .16s ease, background .16s ease; }
+        .lxgp-iconbtn:hover:not(:disabled) { background:rgba(255,255,255,.14); transform:translateY(-1px); }
+        .lxgp-iconbtn:disabled { opacity:.35; cursor:not-allowed; }
+        .lxgp-play { appearance:none; width:58px; height:58px; border-radius:50%; border:0; cursor:pointer; color:#1a1226; display:inline-flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#ff8fc0,#b98cff 55%,#7fe3f5); box-shadow:0 10px 26px rgba(185,140,255,.45), inset 0 0 0 1px rgba(255,255,255,.35); transition:transform .16s ease; }
+        .lxgp-play:hover { transform:translateY(-2px) scale(1.03); }
+        .lxgp-play.playing { animation:lxgp-pulse 2.6s ease-in-out infinite; }
+        @keyframes lxgp-pulse { 0%,100%{ box-shadow:0 10px 24px rgba(185,140,255,.38), inset 0 0 0 1px rgba(255,255,255,.32) } 50%{ box-shadow:0 10px 38px rgba(255,143,192,.72), inset 0 0 0 1px rgba(255,255,255,.5) } }
+        .lxgp-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:center; }
+        .lxgp-btn { appearance:none; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06); color:#f2eeff; border-radius:10px; height:32px; padding:0 13px; font:inherit; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; transition:background .16s ease, transform .16s ease; }
+        .lxgp-btn:hover:not(:disabled) { background:rgba(255,255,255,.13); transform:translateY(-1px); }
+        .lxgp-btn:disabled { opacity:.4; cursor:not-allowed; }
+        .lxgp-btn-primary { border:0; color:#191125; font-weight:650; background:linear-gradient(135deg,#ff8fc0,#b98cff); }
         .lxgp-mode { border-radius:999px; }
-        .lxgp-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:36px 16px; color:var(--dsw-alias-label-secondary); }
-        .lxgp-empty strong { color:var(--dsw-alias-label-primary); font-size:13.5px; font-weight:600; }
+        .lxgp-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:38px 16px; color:#a9a2c6; }
+        .lxgp-empty strong { color:#f4f1ff; font-size:13.5px; font-weight:600; }
+        .lxgp-error { font-size:11.5px; color:#ff9db4; background:rgba(255,90,130,.12); border:1px solid rgba(255,90,130,.35); border-radius:10px; padding:8px 10px; }
         .lxgp-tab-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:220px; display:inline-block; vertical-align:bottom; }
       `)
 
@@ -832,64 +898,119 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'lxgp' }, css,
-        h('div', { className: 'lxgp-cover' },
-          player.cover
-            ? h('img', { src: player.cover, alt: '', referrerPolicy: 'no-referrer', onError: (e) => { e.currentTarget.style.display = 'none' } })
-            : h(Icon, { name: 'note', size: 44 }),
-        ),
-        h('div', { className: 'lxgp-title' }, player.title || t('player.title')),
-        h('div', { className: 'lxgp-sub' },
-          [player.singer || t('player.unknownArtist'), player.album].filter(Boolean).join(' · '),
-        ),
-        player.playlist ? h('div', { className: 'lxgp-note' }, t('player.playlistLine', {
-          name: player.playlist.name,
-          index: (player.playlist.index || 0) + 1,
-          total: player.playlist.total || 0,
-        })) : null,
-        player.playlist && Array.isArray(player.playlist.skipped) && player.playlist.skipped.length
-          ? h('div', { className: 'lxgp-note lxgp-skip' }, t('player.skipped', {
-            count: player.playlist.skipped.length,
-            names: player.playlist.skipped.map((entry) => entry && entry.name ? entry.name : '').filter(Boolean).slice(0, 5).join('、'),
-          }))
-          : null,
-        h('div', { className: 'lxgp-chips' },
-          player.quality ? h('span', { className: 'lxgp-chip' }, t('player.qualityChip', { quality: QUALITY_LABELS[player.quality] || player.quality })) : null,
-          player.platform ? h('span', { className: 'lxgp-chip' }, platformLabel(player.platform)) : null,
-        ),
-        h('audio', {
-          ref: audioRef,
-          src,
-          controls: true,
-          autoPlay: true,
-          preload: 'auto',
-          playsInline: true,
-          onPlay: () => setBlocked(false),
-          onError: () => setMediaError(t('player.expired')),
-          onEnded: () => {
-            if (!player.playlist) return
-            if (player.playlist.mode === 'single') {
-              const audio = audioRef.current
-              if (!audio) return
-              audio.currentTime = 0
-              audio.play().catch(() => setBlocked(true))
-              return
-            }
-            stepPlaylist(1)
-          },
-        }),
-        blocked ? h('button', { type: 'button', className: 'lxgp-btn lxgp-btn-primary', onClick: playNow }, t('player.tapToPlay')) : null,
-        mediaError ? h('div', { className: 'lxgp-error' }, mediaError) : null,
-        h('div', { className: 'lxgp-note' }, t('player.emptyHint')),
-        player.playlist ? h('div', { className: 'lxgp-controls' },
-          h('button', { type: 'button', className: 'lxgp-btn', onClick: () => stepPlaylist(-1), disabled: retrying }, t('player.prev')),
-          h('button', { type: 'button', className: 'lxgp-btn', onClick: () => stepPlaylist(1), disabled: retrying }, t('player.next')),
-          h('button', {
-            type: 'button', className: 'lxgp-btn lxgp-mode', onClick: cycleMode, disabled: retrying,
-            title: t('mode.title'), 'aria-label': t('mode.title'),
-          }, t('mode.' + (player.playlist.mode || 'list'))),
-        ) : null,
-        h('div', { style: { display: 'flex', gap: 8 } },
-          h('button', { type: 'button', className: 'lxgp-btn', onClick: retry, disabled: retrying }, retrying ? t('player.retrying') : t('player.retry')),
+        player.cover ? h('div', {
+          className: 'lxgp-bg',
+          style: { backgroundImage: `url("${player.cover}")` },
+        }) : null,
+        h('div', { className: 'lxgp-veil' }),
+        h('div', { className: 'lxgp-body' },
+          h('div', { className: 'lxgp-card' },
+            h('div', { className: 'lxgp-ring' }),
+            h('div', { className: 'lxgp-spark' }, '✦'),
+            player.cover
+              ? h('img', { src: player.cover, alt: '', referrerPolicy: 'no-referrer', onError: (e) => { e.currentTarget.style.display = 'none' } })
+              : h(Icon, { name: 'note', size: 46 }),
+          ),
+          h('div', { className: 'lxgp-title' }, player.title || t('player.title')),
+          h('div', { className: 'lxgp-sub' },
+            [player.singer || t('player.unknownArtist'), player.album].filter(Boolean).join(' · '),
+          ),
+          h('div', { className: 'lxgp-chips' },
+            player.quality ? h('span', { className: 'lxgp-chip lxgp-chip-a' }, t('player.qualityChip', { quality: QUALITY_LABELS[player.quality] || player.quality })) : null,
+            player.platform ? h('span', { className: 'lxgp-chip lxgp-chip-b' }, platformLabel(player.platform)) : null,
+            player.playlist ? h('span', { className: 'lxgp-chip' }, t('player.playlistLine', {
+              name: player.playlist.name,
+              index: (player.playlist.index || 0) + 1,
+              total: player.playlist.total || 0,
+            })) : null,
+          ),
+          player.playlist && Array.isArray(player.playlist.skipped) && player.playlist.skipped.length
+            ? h('div', { className: 'lxgp-note lxgp-skip' }, t('player.skipped', {
+              count: player.playlist.skipped.length,
+              names: player.playlist.skipped.map((entry) => entry && entry.name ? entry.name : '').filter(Boolean).slice(0, 5).join('、'),
+            }))
+            : null,
+          h('div', { className: 'lxgp-progress' },
+            h('input', {
+              className: 'lxgp-seek',
+              type: 'range',
+              min: 0,
+              max: Math.max(1, Math.floor(duration || 0)),
+              step: 1,
+              value: Math.min(Math.floor(currentTime), Math.floor(duration || 0)) || 0,
+              style: { '--lxgp-pct': `${progressPct}%` },
+              onChange: (event) => seekTo(Number(event.target.value)),
+              'aria-label': t('player.title'),
+            }),
+            h('div', { className: 'lxgp-times' },
+              h('span', null, formatTime(currentTime)),
+              h('span', null, formatTime(duration)),
+            ),
+          ),
+          h('div', { className: 'lxgp-transport' },
+            h('button', {
+              type: 'button',
+              className: 'lxgp-iconbtn',
+              onClick: () => stepPlaylist(-1),
+              disabled: retrying || !player.playlist,
+              title: t('player.prev'),
+              'aria-label': t('player.prev'),
+            }, h(Icon, { name: 'prev', size: 18 })),
+            h('button', {
+              type: 'button',
+              className: playing ? 'lxgp-play playing' : 'lxgp-play',
+              onClick: togglePlay,
+              title: playing ? t('player.pause') : t('player.play'),
+              'aria-label': playing ? t('player.pause') : t('player.play'),
+            }, h(Icon, { name: playing ? 'pause' : 'play', size: 24 })),
+            h('button', {
+              type: 'button',
+              className: 'lxgp-iconbtn',
+              onClick: () => stepPlaylist(1),
+              disabled: retrying || !player.playlist,
+              title: t('player.next'),
+              'aria-label': t('player.next'),
+            }, h(Icon, { name: 'next', size: 18 })),
+          ),
+          player.playlist ? h('div', { className: 'lxgp-row' },
+            h('button', {
+              type: 'button', className: 'lxgp-btn lxgp-mode', onClick: cycleMode, disabled: retrying,
+              title: t('mode.title'), 'aria-label': t('mode.title'),
+            }, t('mode.' + (player.playlist.mode || 'list'))),
+          ) : null,
+          h('div', { className: 'lxgp-row' },
+            h('button', { type: 'button', className: 'lxgp-btn', onClick: retry, disabled: retrying },
+              h(Icon, { name: 'refresh', size: 14 }),
+              retrying ? t('player.retrying') : t('player.retry')),
+          ),
+          blocked ? h('button', { type: 'button', className: 'lxgp-btn lxgp-btn-primary', onClick: playNow }, t('player.tapToPlay')) : null,
+          mediaError ? h('div', { className: 'lxgp-error' }, mediaError) : null,
+          h('div', { className: 'lxgp-note', style: { textAlign: 'center' } }, t('player.emptyHint')),
+          h('audio', {
+            ref: audioRef,
+            src,
+            autoPlay: true,
+            preload: 'auto',
+            playsInline: true,
+            style: { display: 'none' },
+            onPlay: () => { setBlocked(false); setPlaying(true) },
+            onPause: () => setPlaying(false),
+            onTimeUpdate: (event) => setCurrentTime(event.currentTarget.currentTime || 0),
+            onLoadedMetadata: (event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0),
+            onDurationChange: (event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0),
+            onError: () => setMediaError(t('player.expired')),
+            onEnded: () => {
+              if (!player.playlist) return
+              if (player.playlist.mode === 'single') {
+                const audio = audioRef.current
+                if (!audio) return
+                audio.currentTime = 0
+                audio.play().catch(() => setBlocked(true))
+                return
+              }
+              stepPlaylist(1)
+            },
+          }),
         ),
       )
     }
