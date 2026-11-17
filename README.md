@@ -69,7 +69,7 @@
 
 ### 5. 搜索下载（可选）
 
-设置页的「搜索下载」仍可手动搜索并下载到 `/sdcard/Music/lx-geteer`。
+设置页的「搜索下载」仍可手动搜索并下载到配置的下载目录（默认是本机「下载」文件夹下的 `lx-geteer`）。
 
 ### 导入音源注意
 
@@ -90,7 +90,7 @@ Host 插件
    ├─ lib/lx-runtime.js  node:vm 中运行用户导入的 LX 源 → musicUrl
    ├─ lib/player.js      播放状态 + /lx-geteer-stream 音频代理（带 Range/Referer/类型嗅探）
    ├─ lib/playlist.js    .lxmc 解析、歌单存储与播放索引
-   ├─ lib/download.js    流式下载到 /sdcard/Music/lx-geteer
+   ├─ lib/download.js    流式下载到配置的下载目录（默认 ~/Downloads/lx-geteer）
    └─ lib/store.js       自定义音源库与设置持久化
    │  GET /lx-geteer-api?op=player
    ▼
@@ -172,7 +172,7 @@ docs/                 协议说明
 
 - 音源是第三方 JavaScript，会在宿主进程中通过 `node:vm` 执行，并可通过 `lx.request` 访问网络。**只导入你信任的脚本。**
 - 沙箱没有 `require`、`process`、文件系统 API；但 `vm` 不是硬安全边界，恶意脚本仍可能消耗 CPU/网络。
-- 下载只写入你配置的目录；默认是 `/sdcard/Music/lx-geteer`。
+- 下载只写入你配置的目录；默认是 `~/Downloads/lx-geteer`（Windows 为 `%USERPROFILE%\Downloads\lx-geteer`）。
 - API 与音频代理只接受同源浏览器请求（校验 `Origin` 与 `Host`）。
 
 ## 许可
