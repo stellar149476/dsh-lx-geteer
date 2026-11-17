@@ -6,6 +6,16 @@
 > 设置入口：**设置 → LX 音源抓取**  
 > **本插件不附带任何音源脚本**，首次使用需要自己导入 `.js` 音源。
 
+## 演示
+
+点下面的动图看完整录屏（48 秒，mp4）：左侧「音乐」入口 → 对话点歌 → 右侧播放器自动弹出。
+
+<p align="center">
+  <a href="https://github.com/stellar149476/dsh-lx-geteer/releases/download/0.4.12/demo.mp4">
+    <img src="docs/demo.gif" alt="dsh-lx-geteer 演示：点歌、播放器与音乐页" width="820">
+  </a>
+</p>
+
 ## 功能
 
 - **对话点歌**：在对话框输入「想听周杰伦的晴天」「放首告五人的歌」，模型会调用 `play_music`，自动搜索并用当前音源解析。
