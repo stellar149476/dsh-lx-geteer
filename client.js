@@ -482,7 +482,13 @@ window.__ModuleLoader__.load({
      */
     function resolveSidebarRight(ctx) {
       if (!ctx) return undefined
-      if (ctx.sidebarRight && typeof ctx.sidebarRight.openTab === 'function') return ctx.sidebarRight
+      // Reading an undeclared service off the context proxy throws
+      // ("cannot get property … without inject"), so probe it defensively: a
+      // window without a session has no right column at all.
+      try {
+        const direct = ctx.sidebarRight
+        if (direct && typeof direct.openTab === 'function') return direct
+      } catch { /* service not in this scope */ }
       if (typeof ctx.get === 'function') {
         try {
           const service = ctx.get('sidebarRight')
@@ -936,10 +942,9 @@ window.__ModuleLoader__.load({
       // or the column refused the open, which reads as a dead button.
       const openPlayer = async () => {
         const face = resolveSidebarRight(ctx)
-        if (!face) {
-          setError(t('player.unavailable'))
-          return
-        }
+        // No right column in this window: the hub's own <audio> takes over, so
+        // this is not a failure.
+        if (!face) return false
         let failure = null
         for (const options of [{ revealIfOpened: true }, {}]) {
           try {
@@ -1041,6 +1046,11 @@ window.__ModuleLoader__.load({
         ? snap.providers.map((item) => [item.platform, item.label])
         : PLATFORM_OPTIONS
       const playing = player && player.status === 'ready' && player.title
+      // No session means no right column: the hub then hosts its own <audio>,
+      // otherwise the player tab owns playback and a second element would echo.
+      const inlineSrc = !resolveSidebarRight(ctx) && playing && player.streamPath
+        ? absAppPath(player.streamPath)
+        : ''
 
       const css = h('style', null, `
         .lxgm { display:flex; flex-direction:column; gap:12px; height:100%; overflow-y:auto; padding:18px 20px 28px; box-sizing:border-box; color:var(--dsw-alias-label-primary); font-size:13px; line-height:1.5; }
@@ -1068,6 +1078,7 @@ window.__ModuleLoader__.load({
         .lxgm-empty { font-size:11.5px; color:var(--dsw-alias-label-secondary); padding:6px 8px; }
         .lxgm-error { font-size:11.5px; color:var(--dsw-alias-state-error-primary); background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); border-radius:8px; padding:7px 9px; }
         .lxgm-toast { font-size:11.5px; color:var(--dsw-alias-state-success-primary); }
+        .lxgm-audio { width:100%; height:36px; }
       `)
 
       return h('div', { className: embedded ? 'lxgm lxgm-embedded' : 'lxgm' }, css,
@@ -1084,6 +1095,14 @@ window.__ModuleLoader__.load({
           ),
           h('button', { type: 'button', className: 'lxgm-btn', onClick: openPlayer }, t('music.openPlayer')),
         ) : null,
+        inlineSrc ? h('audio', {
+          className: 'lxgm-audio',
+          src: inlineSrc,
+          controls: true,
+          autoPlay: true,
+          preload: 'auto',
+          playsInline: true,
+        }) : null,
         h('div', { className: 'lxgm-searchbar' },
           h('select', {
             className: 'lxgm-select',
@@ -2045,9 +2064,14 @@ window.__ModuleLoader__.load({
           ctx.effect(() => locale.register('lx-geteer', { zh: ZH, en: EN }), 'dsh-lx-geteer: locale')
         }
 
-        // One right-sidebar tab type, reused for every song. keepMounted keeps
-        // the <audio> element alive while the user switches sidebar tabs.
-        const tabTypes = ctx.get('sidebarRightTabs')
+        // The tab registry is global, but a window without a session still has
+        // no right column; probe both instead of assuming they exist.
+        let tabTypes
+        try {
+          tabTypes = ctx.get('sidebarRightTabs')
+        } catch {
+          tabTypes = undefined
+        }
         if (tabTypes && typeof tabTypes.register === 'function') {
           ctx.effect(() => tabTypes.register({
             id: PLAYER_KIND,
