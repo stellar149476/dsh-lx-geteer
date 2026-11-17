@@ -1,0 +1,6 @@
+# dsh-lx-geteer bundle patch.
+# The Host half serves /lx-geteer-api and runs the LX custom-source sandbox.
+# The Client half registers the "LX 音源抓取" settings section.
+- insert:
+    - id: dsh-lx-geteer
+      name: dsh-lx-geteer

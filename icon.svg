@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="LX source getter">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1f7a6a"/>
+      <stop offset="1" stop-color="#0d3f47"/>
+    </linearGradient>
+    <linearGradient id="note" x1="20" y1="18" x2="44" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c7ffe9"/>
+      <stop offset="1" stop-color="#6fe0bd"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bg)"/>
+  <path d="M22 42V23.5l17-3v16" fill="none" stroke="url(#note)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="18.5" cy="42" rx="5.5" ry="4.5" fill="#c7ffe9"/>
+  <ellipse cx="35.5" cy="39" rx="5.5" ry="4.5" fill="#c7ffe9"/>
+  <path d="M44 18v9m-4.5-4.5h9" stroke="#8ff3d3" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M46 32.5c2.8 3.1 4.2 5.5 4.2 7.6a4.2 4.2 0 0 1-8.4 0c0-2.1 1.4-4.5 4.2-7.6Z" fill="#8ff3d3" opacity=".92"/>
+</svg>
