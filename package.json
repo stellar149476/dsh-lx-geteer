@@ -1,6 +1,6 @@
 {
   "name": "dsh-lx-geteer",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "type": "module",
   "description": "在 Harness 对话中点歌或用 .lxmc 歌单播放；支持音质/音源按钮（默认 320K/网易云）、右侧播放器、单曲/列表/随机/顺序模式。",

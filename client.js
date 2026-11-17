@@ -2034,7 +2034,9 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots'],
+      // `ctx.get(name)` only works for declared services; the dock tabs and the
+      // "open player" jump both need these two.
+      inject: ['slots', 'sidebarRight', 'sidebarRightTabs'],
       apply(ctx) {
         const slots = ctx.get('slots')
         const locale = ctx.get('locale')
