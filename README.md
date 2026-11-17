@@ -8,10 +8,10 @@
 
 ## 演示
 
-点下面的动图看完整录屏（48 秒，mp4）：左侧「音乐」入口 → 对话点歌 → 右侧播放器自动弹出。
+点下面的动图看完整录屏（48 秒）：左侧「音乐」入口 → 对话点歌 → 右侧播放器自动弹出。
 
 <p align="center">
-  <a href="https://github.com/stellar149476/dsh-lx-geteer/releases/download/0.4.12/demo.mp4">
+  <a href="docs/demo.mp4">
     <img src="docs/demo.gif" alt="dsh-lx-geteer 演示：点歌、播放器与音乐页" width="820">
   </a>
 </p>
