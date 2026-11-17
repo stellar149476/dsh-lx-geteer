@@ -695,6 +695,11 @@ window.__ModuleLoader__.load({
       const [playing, setPlaying] = React.useState(false)
       const [currentTime, setCurrentTime] = React.useState(0)
       const [duration, setDuration] = React.useState(0)
+      /** Measured cover aspect ratio, so the card never crops the artwork. */
+      const [coverRatio, setCoverRatio] = React.useState(0)
+      React.useEffect(() => {
+        setCoverRatio(0)
+      }, [player && player.cover])
       const token = player && player.token ? player.token : ''
       const src = token ? absAppPath(`/lx-geteer-stream?id=${encodeURIComponent(token)}`) : ''
 
@@ -822,8 +827,9 @@ window.__ModuleLoader__.load({
           radial-gradient(110% 70% at 90% 8%, rgba(103,232,249,.18), transparent 58%),
           linear-gradient(180deg, rgba(12,10,20,.12), rgba(12,10,20,.72) 72%, #0c0a13); }
         .lxgp-body { position:relative; z-index:1; display:flex; flex-direction:column; gap:13px; }
-        .lxgp-card { position:relative; width:100%; aspect-ratio:1/1; max-height:300px; border-radius:24px; overflow:hidden; background:linear-gradient(140deg,#241d3d,#141021); box-shadow:0 14px 40px rgba(0,0,0,.5), 0 0 26px rgba(255,111,165,.22), 0 0 0 1px rgba(255,255,255,.09); }
-        .lxgp-card img { width:100%; height:100%; object-fit:cover; display:block; transform:scale(1.01); transition:transform .7s ease; }
+        .lxgp-card { position:relative; width:100%; aspect-ratio:1/1; max-height:340px; border-radius:24px; overflow:hidden; background:linear-gradient(140deg,#241d3d,#141021); box-shadow:0 14px 40px rgba(0,0,0,.5), 0 0 26px rgba(255,111,165,.22), 0 0 0 1px rgba(255,255,255,.09); }
+        .lxgp-card img { width:100%; height:100%; object-fit:contain; display:block; transform:scale(1); transition:transform .7s ease; }
+        .lxgp-card-bg { position:absolute; inset:-14px; background-size:cover; background-position:center; filter:blur(22px) brightness(.45) saturate(1.2); }
         .lxgp-card:hover img { transform:scale(1.06); }
         .lxgp-card::after { content:''; position:absolute; inset:0; background:linear-gradient(180deg, rgba(10,8,16,0) 52%, rgba(10,8,16,.55)); }
         .lxgp-ring { position:absolute; inset:9px; border-radius:18px; border:1px solid rgba(255,255,255,.18); pointer-events:none; z-index:2; }
@@ -904,11 +910,29 @@ window.__ModuleLoader__.load({
         }) : null,
         h('div', { className: 'lxgp-veil' }),
         h('div', { className: 'lxgp-body' },
-          h('div', { className: 'lxgp-card' },
+          h('div', {
+            className: 'lxgp-card',
+            style: { aspectRatio: coverRatio > 0 && Number.isFinite(coverRatio) ? String(coverRatio) : '1 / 1' },
+          },
+            player.cover ? h('div', {
+              className: 'lxgp-card-bg',
+              style: { backgroundImage: `url("${player.cover}")` },
+            }) : null,
             h('div', { className: 'lxgp-ring' }),
             h('div', { className: 'lxgp-spark' }, '✦'),
             player.cover
-              ? h('img', { src: player.cover, alt: '', referrerPolicy: 'no-referrer', onError: (e) => { e.currentTarget.style.display = 'none' } })
+              ? h('img', {
+                src: player.cover,
+                alt: '',
+                referrerPolicy: 'no-referrer',
+                onLoad: (event) => {
+                  const image = event.currentTarget
+                  if (image.naturalWidth && image.naturalHeight) {
+                    setCoverRatio(image.naturalWidth / image.naturalHeight)
+                  }
+                },
+                onError: (e) => { e.currentTarget.style.display = 'none' },
+              })
               : h(Icon, { name: 'note', size: 46 }),
           ),
           h('div', { className: 'lxgp-title' }, player.title || t('player.title')),
