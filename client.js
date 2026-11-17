@@ -544,6 +544,26 @@ window.__ModuleLoader__.load({
       }
     }
     const playerStore = createPlayerStore()
+    /**
+     * The plugin owns exactly one <audio> element; tabs, split panes and the
+     * music hub are only views over it. Mounting a fresh element per tab made
+     * the same stream play twice after the player tab was closed and reopened.
+     */
+    let sharedAudio = null
+    /** Two panes can mount a player view; only one of them may advance the list. */
+    let lastEndedAt = 0
+    function audioSession() {
+      if (sharedAudio) return sharedAudio
+      if (typeof document === 'undefined' || !document.body) return null
+      const audio = document.createElement('audio')
+      audio.preload = 'auto'
+      audio.setAttribute('playsinline', '')
+      audio.setAttribute('webkit-playsinline', '')
+      audio.style.display = 'none'
+      document.body.appendChild(audio)
+      sharedAudio = audio
+      return audio
+    }
 
     function translate(locale, key, vars) {
       let text = ''
@@ -688,7 +708,9 @@ window.__ModuleLoader__.load({
       }, [locale])
       const t = (key, vars) => translate(locale, key, vars)
       const player = usePlayerStore(playerStore)
-      const audioRef = React.useRef(null)
+      const playerRef = React.useRef(player)
+      playerRef.current = player
+      const stepRef = React.useRef(null)
       const [blocked, setBlocked] = React.useState(false)
       const [mediaError, setMediaError] = React.useState('')
       const [retrying, setRetrying] = React.useState(false)
@@ -708,13 +730,62 @@ window.__ModuleLoader__.load({
         setMediaError('')
         setCurrentTime(0)
         setDuration(0)
-        const audio = audioRef.current
-        if (!audio || !src) return undefined
+        const audio = audioSession()
+        if (!audio) return undefined
+        if (!src) {
+          audio.pause()
+          return undefined
+        }
+        if (audio.getAttribute('src') !== src) audio.src = src
         try { audio.load() } catch { /* source will load on play */ }
         const attempt = audio.play()
         if (attempt && typeof attempt.catch === 'function') attempt.catch(() => setBlocked(true))
         return undefined
       }, [src])
+
+      // Mirror the shared element into local UI state, and keep the playlist
+      // hand-off here so it works no matter which view mounted first.
+      React.useEffect(() => {
+        const audio = audioSession()
+        if (!audio) return undefined
+        const onPlay = () => { setBlocked(false); setPlaying(true) }
+        const onPause = () => setPlaying(false)
+        const onTime = () => setCurrentTime(audio.currentTime || 0)
+        const onDuration = () => setDuration(Number.isFinite(audio.duration) ? audio.duration : 0)
+        const onError = () => setMediaError(t('player.expired'))
+        const onEnded = () => {
+          const current = playerRef.current
+          if (!current || !current.playlist) return
+          const now = Date.now()
+          if (now - lastEndedAt < 1500) return
+          lastEndedAt = now
+          if (current.playlist.mode === 'single') {
+            audio.currentTime = 0
+            audio.play().catch(() => setBlocked(true))
+            return
+          }
+          if (stepRef.current) stepRef.current(1)
+        }
+        audio.addEventListener('play', onPlay)
+        audio.addEventListener('pause', onPause)
+        audio.addEventListener('timeupdate', onTime)
+        audio.addEventListener('loadedmetadata', onDuration)
+        audio.addEventListener('durationchange', onDuration)
+        audio.addEventListener('error', onError)
+        audio.addEventListener('ended', onEnded)
+        setPlaying(!audio.paused)
+        setCurrentTime(audio.currentTime || 0)
+        setDuration(Number.isFinite(audio.duration) ? audio.duration : 0)
+        return () => {
+          audio.removeEventListener('play', onPlay)
+          audio.removeEventListener('pause', onPause)
+          audio.removeEventListener('timeupdate', onTime)
+          audio.removeEventListener('loadedmetadata', onDuration)
+          audio.removeEventListener('durationchange', onDuration)
+          audio.removeEventListener('error', onError)
+          audio.removeEventListener('ended', onEnded)
+        }
+      }, [])
 
       React.useEffect(() => {
         try {
@@ -758,6 +829,8 @@ window.__ModuleLoader__.load({
         }
       }
 
+      stepRef.current = stepPlaylist
+
       const cycleMode = async () => {
         if (!player || !player.playlist || retrying) return
         const current = player.playlist.mode || 'list'
@@ -785,7 +858,7 @@ window.__ModuleLoader__.load({
       }
 
       const playNow = () => {
-        const audio = audioRef.current
+        const audio = audioSession()
         if (!audio) return
         audio.play().then(() => setBlocked(false)).catch((error) => setMediaError(error.message || '播放失败'))
       }
@@ -799,7 +872,7 @@ window.__ModuleLoader__.load({
       }
 
       const togglePlay = () => {
-        const audio = audioRef.current
+        const audio = audioSession()
         if (!audio) return
         if (audio.paused) {
           audio.play().then(() => setBlocked(false)).catch(() => setBlocked(true))
@@ -809,7 +882,7 @@ window.__ModuleLoader__.load({
       }
 
       const seekTo = (value) => {
-        const audio = audioRef.current
+        const audio = audioSession()
         const next = Number(value)
         if (!audio || !Number.isFinite(next)) return
         try { audio.currentTime = next } catch { /* not seekable yet */ }
@@ -1010,31 +1083,6 @@ window.__ModuleLoader__.load({
           blocked ? h('button', { type: 'button', className: 'lxgp-btn lxgp-btn-primary', onClick: playNow }, t('player.tapToPlay')) : null,
           mediaError ? h('div', { className: 'lxgp-error' }, mediaError) : null,
           h('div', { className: 'lxgp-note', style: { textAlign: 'center' } }, t('player.emptyHint')),
-          h('audio', {
-            ref: audioRef,
-            src,
-            autoPlay: true,
-            preload: 'auto',
-            playsInline: true,
-            style: { display: 'none' },
-            onPlay: () => { setBlocked(false); setPlaying(true) },
-            onPause: () => setPlaying(false),
-            onTimeUpdate: (event) => setCurrentTime(event.currentTarget.currentTime || 0),
-            onLoadedMetadata: (event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0),
-            onDurationChange: (event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0),
-            onError: () => setMediaError(t('player.expired')),
-            onEnded: () => {
-              if (!player.playlist) return
-              if (player.playlist.mode === 'single') {
-                const audio = audioRef.current
-                if (!audio) return
-                audio.currentTime = 0
-                audio.play().catch(() => setBlocked(true))
-                return
-              }
-              stepPlaylist(1)
-            },
-          }),
         ),
       )
     }
@@ -1067,6 +1115,44 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState('')
       const [toast, setToast] = React.useState('')
       const fileRef = React.useRef(null)
+      // Inline transport, used when the window has no right column. It drives
+      // the shared <audio> session instead of creating a second element.
+      const inlineMode = !resolveSidebarRight(ctx)
+      const [inlinePlaying, setInlinePlaying] = React.useState(false)
+      const [inlineTime, setInlineTime] = React.useState(0)
+      const [inlineDuration, setInlineDuration] = React.useState(0)
+      React.useEffect(() => {
+        if (!inlineMode) return undefined
+        const audio = audioSession()
+        if (!audio) return undefined
+        const sync = () => {
+          setInlinePlaying(!audio.paused)
+          setInlineTime(audio.currentTime || 0)
+          setInlineDuration(Number.isFinite(audio.duration) ? audio.duration : 0)
+        }
+        const events = ['play', 'pause', 'timeupdate', 'loadedmetadata', 'durationchange']
+        for (const name of events) audio.addEventListener(name, sync)
+        sync()
+        return () => {
+          for (const name of events) audio.removeEventListener(name, sync)
+        }
+      }, [inlineMode])
+      const clock = (value) => {
+        const total = Number(value)
+        if (!Number.isFinite(total) || total < 0) return '0:00'
+        return `${Math.floor(total / 60)}:${String(Math.floor(total % 60)).padStart(2, '0')}`
+      }
+      const toggleInline = () => {
+        const audio = audioSession()
+        if (!audio) return
+        if (audio.paused) audio.play().catch(() => {})
+        else audio.pause()
+      }
+      const seekInline = (value) => {
+        const audio = audioSession()
+        if (!audio || !Number.isFinite(value)) return
+        try { audio.currentTime = value } catch { /* not seekable yet */ }
+      }
 
       const refresh = React.useCallback(async () => {
         try {
@@ -1191,11 +1277,6 @@ window.__ModuleLoader__.load({
         ? snap.providers.map((item) => [item.platform, item.label])
         : PLATFORM_OPTIONS
       const playing = player && player.status === 'ready' && player.title
-      // No session means no right column: the hub then hosts its own <audio>,
-      // otherwise the player tab owns playback and a second element would echo.
-      const inlineSrc = !resolveSidebarRight(ctx) && playing && player.streamPath
-        ? absAppPath(player.streamPath)
-        : ''
 
       const css = h('style', null, `
         .lxgm { display:flex; flex-direction:column; gap:12px; height:100%; overflow-y:auto; padding:18px 20px 28px; box-sizing:border-box; color:var(--dsw-alias-label-primary); font-size:13px; line-height:1.5; }
@@ -1223,7 +1304,11 @@ window.__ModuleLoader__.load({
         .lxgm-empty { font-size:11.5px; color:var(--dsw-alias-label-secondary); padding:6px 8px; }
         .lxgm-error { font-size:11.5px; color:var(--dsw-alias-state-error-primary); background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); border-radius:8px; padding:7px 9px; }
         .lxgm-toast { font-size:11.5px; color:var(--dsw-alias-state-success-primary); }
-        .lxgm-audio { width:100%; height:36px; }
+        .lxgm-inline { display:flex; align-items:center; gap:10px; }
+        .lxgm-seek { -webkit-appearance:none; appearance:none; flex:1; min-width:0; height:5px; border-radius:999px; outline:none; cursor:pointer; background:linear-gradient(90deg,#ff6fa5,#b98cff); }
+        .lxgm-seek::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; border-radius:50%; background:#fff; box-shadow:0 0 8px rgba(255,111,165,.9); }
+        .lxgm-seek::-moz-range-thumb { width:12px; height:12px; border:0; border-radius:50%; background:#fff; }
+        .lxgm-clock { font-size:11px; color:var(--dsw-alias-label-secondary); font-variant-numeric:tabular-nums; white-space:nowrap; }
       `)
 
       return h('div', { className: embedded ? 'lxgm lxgm-embedded' : 'lxgm' }, css,
@@ -1240,14 +1325,25 @@ window.__ModuleLoader__.load({
           ),
           h('button', { type: 'button', className: 'lxgm-btn', onClick: openPlayer }, t('music.openPlayer')),
         ) : null,
-        inlineSrc ? h('audio', {
-          className: 'lxgm-audio',
-          src: inlineSrc,
-          controls: true,
-          autoPlay: true,
-          preload: 'auto',
-          playsInline: true,
-        }) : null,
+        playing && inlineMode ? h('div', { className: 'lxgm-inline' },
+          h('button', {
+            type: 'button',
+            className: 'lxgm-btn lxgm-btn-primary',
+            onClick: toggleInline,
+            'aria-label': inlinePlaying ? t('player.pause') : t('player.play'),
+          }, inlinePlaying ? t('player.pause') : t('player.play')),
+          h('input', {
+            className: 'lxgm-seek',
+            type: 'range',
+            min: 0,
+            max: Math.max(1, Math.floor(inlineDuration || 0)),
+            step: 1,
+            value: Math.min(Math.floor(inlineTime), Math.floor(inlineDuration || 0)) || 0,
+            onChange: (event) => seekInline(Number(event.target.value)),
+            'aria-label': t('player.title'),
+          }),
+          h('span', { className: 'lxgm-clock' }, `${clock(inlineTime)} / ${clock(inlineDuration)}`),
+        ) : null,
         h('div', { className: 'lxgm-searchbar' },
           h('select', {
             className: 'lxgm-select',
