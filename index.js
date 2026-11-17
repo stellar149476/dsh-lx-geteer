@@ -179,6 +179,48 @@ export function apply(ctx) {
     return picked
   }
 
+  /**
+   * Quality ladder used when the requested quality is not resolvable for a
+   * track (for example `atmos` on most Kugou songs). Attempts only ever go
+   * downwards, so picking 320k never silently upgrades the listener to FLAC.
+   */
+  const QUALITY_RANK = {
+    '128k': 1,
+    '192k': 2,
+    '320k': 3,
+    flac: 4,
+    flac24bit: 5,
+    hires: 6,
+    atmos: 7,
+    atmos_plus: 8,
+    master: 9,
+  }
+  const QUALITY_FALLBACKS = ['320k', '128k']
+  /** Consecutive unresolved tracks a single step/autoplay may skip. */
+  const MAX_SKIP = 5
+
+  function qualityAttempts(platform, preferred) {
+    const supported = new Set((support().find((s) => s.platform === platform)?.qualities) || [])
+    const attempts = []
+    const push = (quality) => {
+      if (!quality || attempts.includes(quality)) return
+      if (supported.size && !supported.has(quality)) return
+      attempts.push(quality)
+    }
+    for (const quality of preferred || []) push(quality)
+    const ceiling = attempts.length
+      ? Math.max(...attempts.map((quality) => QUALITY_RANK[quality] ?? 99))
+      : 99
+    for (const quality of QUALITY_FALLBACKS) {
+      if ((QUALITY_RANK[quality] || 0) <= ceiling) push(quality)
+    }
+    if (!attempts.length) {
+      const picked = qualityOf(platform, null)
+      if (picked) attempts.push(picked)
+    }
+    return attempts.slice(0, 3)
+  }
+
   function withTimeout(promise, ms, message) {
     let timer = null
     const timeout = new Promise((_, reject) => {
@@ -324,18 +366,29 @@ export function apply(ctx) {
     const supported = support().find((s) => s.platform === source)
     if (!supported) throw new Error(`当前音源不支持${platformLabel(source)}（歌单指定 ${source}），请先切换到一个支持该平台的音源`)
     const sourceQuality = qualityOf(source, wantedQuality || store.getSettings().quality)
-    const chosenQuality = pickItemQuality(item, sourceQuality) || sourceQuality
-    const musicInfo = playlistMusicInfo(item, source, chosenQuality)
+    const itemQuality = pickItemQuality(item, sourceQuality) || sourceQuality
     if (!runtime || !runtimeReady) throw new Error('音源尚未就绪')
-    const url = await withTimeout(
-      runtime.musicUrl(source, chosenQuality, musicInfo),
-      20_000,
-      `解析${platformLabel(source)}播放链接超时`,
-    )
-    return { url, item, source, quality: chosenQuality }
+    // Walk down the quality ladder before giving up: a 500 from the source for
+    // `atmos` usually means "this track has no atmos master", not "no audio".
+    const attempts = qualityAttempts(source, [itemQuality, sourceQuality])
+    let lastError = null
+    for (const quality of attempts) {
+      const musicInfo = playlistMusicInfo(item, source, quality)
+      try {
+        const url = await withTimeout(
+          runtime.musicUrl(source, quality, musicInfo),
+          20_000,
+          `解析${platformLabel(source)}播放链接超时`,
+        )
+        return { url, item, source, quality }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError || new Error('解析播放链接失败')
   }
 
-  function publishPlaylistItem(playlist, index, resolved) {
+  function publishPlaylistItem(playlist, index, resolved, skipped = []) {
     playerHub.publish({
       status: 'ready',
       token: playerHub.remember(resolved.url, resolved.source),
@@ -355,25 +408,40 @@ export function apply(ctx) {
         index,
         total: playlist.items.length,
         mode: playlistMode(),
+        skipped: skipped.map((entry) => ({ name: entry.name, singer: entry.singer })),
       },
     })
   }
 
-  async function playPlaylistIndex(playlist, startIndex, quality) {
+  async function playPlaylistIndex(playlist, startIndex, quality, options = {}) {
     const total = playlist.items.length
     const start = Math.max(0, Math.min(total - 1, Number(startIndex) || 0))
+    const requested = Number(options.skipLimit)
+    const skipLimit = Number.isFinite(requested) ? Math.max(0, Math.floor(requested)) : MAX_SKIP
+    const limit = Math.min(Math.max(0, total - 1), skipLimit)
+    const skipped = []
     let lastError = null
-    for (let attempt = 0; attempt < total; attempt += 1) {
+    for (let attempt = 0; attempt <= limit; attempt += 1) {
       const index = (start + attempt) % total
       try {
         const resolved = await resolvePlaylistItem(playlist, index, quality)
-        publishPlaylistItem(playlist, index, resolved)
-        return { index, resolved }
+        publishPlaylistItem(playlist, index, resolved, skipped)
+        return { index, resolved, skipped }
       } catch (error) {
         lastError = error
+        const item = playlist.items[index] || {}
+        skipped.push({ index, name: item.name || `#${index + 1}`, singer: item.singer || '' })
       }
     }
-    throw lastError || new Error('歌单里的歌曲都解析失败')
+    const error = lastError || new Error('歌单里的歌曲都解析失败')
+    error.skipped = skipped
+    throw error
+  }
+
+  function skippedNote(skipped) {
+    if (!skipped || !skipped.length) return ''
+    const names = skipped.map((entry) => entry.name).filter(Boolean).slice(0, 5).join('、')
+    return `（已跳过 ${skipped.length} 首解析失败${names ? `：${names}` : ''}）`
   }
 
   async function playPlaylist(id, index, quality) {
@@ -384,15 +452,31 @@ export function apply(ctx) {
       const result = await playPlaylistIndex(playlist, index, quality)
       return {
         ok: true,
-        message: `正在播放歌单《${playlist.name}》第 ${result.index + 1}/${playlist.items.length} 首：${result.resolved.item.name}${result.resolved.item.singer ? ` — ${result.resolved.item.singer}` : ''}（${result.resolved.quality} / ${platformLabel(result.resolved.source)}）`,
+        message: `正在播放歌单《${playlist.name}》第 ${result.index + 1}/${playlist.items.length} 首：${result.resolved.item.name}${result.resolved.item.singer ? ` — ${result.resolved.item.singer}` : ''}（${result.resolved.quality} / ${platformLabel(result.resolved.source)}）${skippedNote(result.skipped)}`,
         playlist: { id: playlist.id, name: playlist.name, index: result.index, total: playlist.items.length },
         title: result.resolved.item.name,
         singer: result.resolved.item.singer,
       }
     } catch (error) {
       const message = error && error.message ? error.message : String(error)
-      playerHub.publish({ status: 'error', token: '', title: playlist.name, error: message, startedAt: Date.now() })
-      return { ok: false, message: `歌单播放失败：${message}` }
+      const skipped = error && Array.isArray(error.skipped) ? error.skipped : []
+      playerHub.publish({
+        status: 'error',
+        token: '',
+        title: playlist.name,
+        error: `${message}${skippedNote(skipped)}`,
+        startedAt: Date.now(),
+        playlist: {
+          id: playlist.id,
+          name: playlist.name,
+          source: playlist.source,
+          index: skipped.length ? skipped[skipped.length - 1].index : 0,
+          total: playlist.items.length,
+          mode: playlistMode(),
+          skipped: skipped.map((entry) => ({ name: entry.name, singer: entry.singer })),
+        },
+      })
+      return { ok: false, message: `歌单播放失败：${message}${skippedNote(skipped)}` }
     }
   }
 
@@ -431,13 +515,27 @@ export function apply(ctx) {
       const result = await playPlaylistIndex(playlist, next, store.getSettings().quality)
       return {
         ok: true,
-        message: `正在播放：${result.resolved.item.name} — ${result.resolved.item.singer}（${result.index + 1}/${total}）`,
+        message: `正在播放：${result.resolved.item.name} — ${result.resolved.item.singer}（${result.index + 1}/${total}）${skippedNote(result.skipped)}`,
         playlist: { id: playlist.id, name: playlist.name, index: result.index, total },
+        skipped: result.skipped,
       }
     } catch (error) {
       const message = error && error.message ? error.message : String(error)
-      playerHub.publish({ status: 'error', token: '', playlist: { ...context, mode }, title: playlist.name, error: message, startedAt: Date.now() })
-      return { ok: false, message: `播放失败：${message}` }
+      const skipped = error && Array.isArray(error.skipped) ? error.skipped : []
+      playerHub.publish({
+        status: 'error',
+        token: '',
+        playlist: {
+          ...context,
+          mode,
+          index: skipped.length ? skipped[skipped.length - 1].index : context.index,
+          skipped: skipped.map((entry) => ({ name: entry.name, singer: entry.singer })),
+        },
+        title: playlist.name,
+        error: `${message}${skippedNote(skipped)}`,
+        startedAt: Date.now(),
+      })
+      return { ok: false, message: `播放失败：${message}${skippedNote(skipped)}` }
     }
   }
 

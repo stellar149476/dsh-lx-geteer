@@ -196,6 +196,7 @@ window.__ModuleLoader__.load({
       'mode.sequential': '顺序播放',
       'mode.changed': '播放方式：{mode}',
       'player.playlistLine': '{name} · {index}/{total}',
+      'player.skipped': '已跳过 {count} 首解析失败：{names}',
       'player.prev': '上一首',
       'player.next': '下一首',
       'player.ended': '歌单播放结束',
@@ -340,6 +341,7 @@ window.__ModuleLoader__.load({
       'mode.sequential': 'Sequential',
       'mode.changed': 'Play mode: {mode}',
       'player.playlistLine': '{name} · {index}/{total}',
+      'player.skipped': 'Skipped {count} unresolved track(s): {names}',
       'player.prev': 'Previous',
       'player.next': 'Next',
       'player.ended': 'Playlist finished',
@@ -734,6 +736,7 @@ window.__ModuleLoader__.load({
         .lxgp-chip { font-size:10.5px; padding:2px 7px; border-radius:999px; background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary); }
         .lxgp audio { width:100%; display:block; }
         .lxgp-note { font-size:11px; color:var(--dsw-alias-label-secondary); }
+        .lxgp-skip { color:var(--dsw-alias-state-warn-primary, #d9a441); }
         .lxgp-error { font-size:11.5px; color:var(--dsw-alias-state-error-primary); background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent); border-radius:8px; padding:7px 9px; }
         .lxgp-btn { appearance:none; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border-radius:8px; height:32px; padding:0 12px; font:inherit; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
         .lxgp-btn:hover:not(:disabled) { background:var(--dsw-alias-bg-layer-2); }
@@ -796,6 +799,12 @@ window.__ModuleLoader__.load({
           index: (player.playlist.index || 0) + 1,
           total: player.playlist.total || 0,
         })) : null,
+        player.playlist && Array.isArray(player.playlist.skipped) && player.playlist.skipped.length
+          ? h('div', { className: 'lxgp-note lxgp-skip' }, t('player.skipped', {
+            count: player.playlist.skipped.length,
+            names: player.playlist.skipped.map((entry) => entry && entry.name ? entry.name : '').filter(Boolean).slice(0, 5).join('、'),
+          }))
+          : null,
         h('div', { className: 'lxgp-chips' },
           player.quality ? h('span', { className: 'lxgp-chip' }, t('player.qualityChip', { quality: QUALITY_LABELS[player.quality] || player.quality })) : null,
           player.platform ? h('span', { className: 'lxgp-chip' }, platformLabel(player.platform)) : null,
