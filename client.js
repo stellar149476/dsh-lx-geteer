@@ -182,6 +182,7 @@ window.__ModuleLoader__.load({
       'music.play': '播放',
       'music.results': '搜索结果',
       'music.openPlayer': '打开播放器',
+      'music.noSurface': '当前页面没有播放器面板，打开任意会话即可看到它。',
       'music.idle': '暂无播放',
       'music.playError': '播放失败',
       'playlist.title': '歌单库',
@@ -339,6 +340,7 @@ window.__ModuleLoader__.load({
       'music.play': 'Play',
       'music.results': 'Results',
       'music.openPlayer': 'Open player',
+      'music.noSurface': 'This view has no player panel; open any session to see it.',
       'music.idle': 'Nothing playing',
       'music.playError': 'Playback failed',
       'playlist.title': 'Playlists',
@@ -1117,7 +1119,11 @@ window.__ModuleLoader__.load({
       const fileRef = React.useRef(null)
       // Inline transport, used when the window has no right column. It drives
       // the shared <audio> session instead of creating a second element.
-      const inlineMode = !resolveSidebarRight(ctx)
+      // The home/workspace view has the `sidebarRight` service but no mounted
+      // session surface, so opening a tab throws "no session surface is
+      // mounted"; that is a "no column here" case too, not an error.
+      const [surfaceMissing, setSurfaceMissing] = React.useState(false)
+      const inlineMode = surfaceMissing || !resolveSidebarRight(ctx)
       const [inlinePlaying, setInlinePlaying] = React.useState(false)
       const [inlineTime, setInlineTime] = React.useState(0)
       const [inlineDuration, setInlineDuration] = React.useState(0)
@@ -1173,15 +1179,19 @@ window.__ModuleLoader__.load({
       // or the column refused the open, which reads as a dead button.
       const openPlayer = async () => {
         const face = resolveSidebarRight(ctx)
-        // No right column in this window: the hub's own <audio> takes over, so
-        // this is not a failure.
-        if (!face) return false
+        // No right column in this window: the hub's own transport takes over,
+        // so this is not a failure.
+        if (!face) {
+          setSurfaceMissing(true)
+          return false
+        }
         let failure = null
         for (const options of [{ revealIfOpened: true }, {}]) {
           try {
             await face.openTab(PLAYER_KIND, options)
+            setSurfaceMissing(false)
             setError('')
-            return
+            return true
           } catch (error) {
             failure = error
           }
@@ -1191,14 +1201,22 @@ window.__ModuleLoader__.load({
         await new Promise((resolve) => setTimeout(resolve, 120))
         try {
           await face.openTab(PLAYER_KIND, { revealIfOpened: true })
+          setSurfaceMissing(false)
           setError('')
-          return
+          return true
         } catch (error) {
           failure = error
         }
-        setError(t('player.openFailed', {
-          error: failure && failure.message ? failure.message : String(failure),
-        }))
+        const message = failure && failure.message ? failure.message : String(failure)
+        // Workspace home mounts the service but no session surface; the hub's
+        // inline transport covers playback, so report it as a transient state.
+        if (/session surface/i.test(message)) {
+          setSurfaceMissing(true)
+          setError('')
+          return false
+        }
+        setError(t('player.openFailed', { error: message }))
+        return false
       }
 
       const runSearch = async () => {
@@ -1344,6 +1362,9 @@ window.__ModuleLoader__.load({
           }),
           h('span', { className: 'lxgm-clock' }, `${clock(inlineTime)} / ${clock(inlineDuration)}`),
         ) : null,
+        playing && inlineMode && surfaceMissing
+          ? h('div', { className: 'lxgm-sub' }, t('music.noSurface'))
+          : null,
         h('div', { className: 'lxgm-searchbar' },
           h('select', {
             className: 'lxgm-select',
