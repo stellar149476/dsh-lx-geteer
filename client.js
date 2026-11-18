@@ -231,6 +231,7 @@ window.__ModuleLoader__.load({
       'player.openSettings': '去设置页换音源',
       'player.unavailable': '播放器打不开：当前窗口没有侧栏服务（sidebarRight），请刷新界面后重试。',
       'player.openFailed': '播放器打不开：{error}',
+      'player.openInChat': '已开始播放；回到对话界面后会自动打开右侧播放器。',
     }
     const EN = {
       'nav.label': 'LX source getter',
@@ -389,6 +390,7 @@ window.__ModuleLoader__.load({
       'player.openSettings': 'Change source in settings',
       'player.unavailable': 'The player cannot open: this window has no right-column service (sidebarRight). Refresh the interface and retry.',
       'player.openFailed': 'The player cannot open: {error}',
+      'player.openInChat': 'Playing now; the player opens in the sidebar once you are back in a chat.',
     }
 
     const KNOWN_QUALITIES = ['128k', '192k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'master', '24bit']
@@ -506,6 +508,42 @@ window.__ModuleLoader__.load({
         } catch { /* service not in this scope */ }
       }
       return undefined
+    }
+    /**
+     * Try to surface the right-column player.
+     *
+     * DSH only mounts the right column's session surface while a *chat* is the
+     * active main panel: `sidebarRight` derives `mounted` from
+     * `activePanelId === null`, so opening any main panel (this plugin's music
+     * page, the settings page) makes `openTab` reject with
+     * "no session surface is mounted". That is a layout state, not a failure.
+     *
+     * @returns {{state: 'opened'|'surface'|'error', message?: string}}
+     */
+    async function openPlayerTab(ctx) {
+      const face = resolveSidebarRight(ctx)
+      if (!face || typeof face.openTab !== 'function') return { state: 'surface' }
+      let failure = null
+      for (const options of [{ revealIfOpened: true }, {}]) {
+        try {
+          await face.openTab(PLAYER_KIND, options)
+          return { state: 'opened' }
+        } catch (error) {
+          failure = error
+        }
+      }
+      // The seat may still be minting its store on the frame after a session
+      // switch; one delayed retry covers that race instead of swallowing it.
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      try {
+        await face.openTab(PLAYER_KIND, { revealIfOpened: true })
+        return { state: 'opened' }
+      } catch (error) {
+        failure = error
+      }
+      const message = failure && failure.message ? failure.message : String(failure)
+      if (/session surface/i.test(message)) return { state: 'surface', message }
+      return { state: 'error', message }
     }
     const BASE_QUALITIES = ['128k', '320k', 'flac', 'flac24bit']
     const PLAY_MODES = ['single', 'list', 'shuffle', 'sequential']
@@ -1178,44 +1216,20 @@ window.__ModuleLoader__.load({
       // silently: this button used to do nothing when the service was missing
       // or the column refused the open, which reads as a dead button.
       const openPlayer = async () => {
-        const face = resolveSidebarRight(ctx)
-        // No right column in this window: the hub's own transport takes over,
-        // so this is not a failure.
-        if (!face) {
-          setSurfaceMissing(true)
-          return false
-        }
-        let failure = null
-        for (const options of [{ revealIfOpened: true }, {}]) {
-          try {
-            await face.openTab(PLAYER_KIND, options)
-            setSurfaceMissing(false)
-            setError('')
-            return true
-          } catch (error) {
-            failure = error
-          }
-        }
-        // The seat may still be minting its store on the frame after a session
-        // switch; one delayed retry covers that race instead of swallowing it.
-        await new Promise((resolve) => setTimeout(resolve, 120))
-        try {
-          await face.openTab(PLAYER_KIND, { revealIfOpened: true })
+        const result = await openPlayerTab(ctx)
+        if (result.state === 'opened') {
           setSurfaceMissing(false)
           setError('')
           return true
-        } catch (error) {
-          failure = error
         }
-        const message = failure && failure.message ? failure.message : String(failure)
-        // Workspace home mounts the service but no session surface; the hub's
-        // inline transport covers playback, so report it as a transient state.
-        if (/session surface/i.test(message)) {
+        // This view has no session surface (music/settings panel is active): the
+        // hub's own transport takes over, so this is not a failure.
+        if (result.state === 'surface') {
           setSurfaceMissing(true)
           setError('')
           return false
         }
-        setError(t('player.openFailed', { error: message }))
+        setError(t('player.openFailed', { error: result.message }))
         return false
       }
 
@@ -1735,8 +1749,16 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const result = await api('playPlaylist', { id: playlist.id })
-          if (!result.ok) setError(result.message || t('playlist.needSource'))
-          else setToast(result.message || t('playlist.playing'))
+          if (!result.ok) {
+            setError(result.message || t('playlist.needSource'))
+            return
+          }
+          setToast(result.message || t('playlist.playing'))
+          // Settings is a main panel, so the right column has no session
+          // surface; say where playback will surface instead of staying silent.
+          const opened = await openPlayerTab(ctx)
+          if (opened.state === 'surface') setToast(t('player.openInChat'))
+          else if (opened.state === 'error') setError(t('player.openFailed', { error: opened.message }))
         } catch (e) {
           setError(e.message)
         } finally {
@@ -2423,6 +2445,29 @@ window.__ModuleLoader__.load({
             }
           })
         }
+
+        // Playback must not depend on any particular view being mounted: the
+        // settings page and the music hub are main panels, so the right column
+        // has no session surface there and no player tab exists to own an
+        // <audio>. Keep the shared session pointed at the current stream.
+        let syncedToken = ''
+        const syncAudio = (state) => {
+          if (!state || state.status !== 'ready' || !state.token) return
+          if (syncedToken === state.token) return
+          const audio = audioSession()
+          if (!audio) return
+          syncedToken = state.token
+          const next = absAppPath(`/lx-geteer-stream?id=${encodeURIComponent(state.token)}`)
+          if (audio.getAttribute('src') !== next) audio.src = next
+          try { audio.load() } catch { /* browsers retry on play */ }
+          const attempt = audio.play()
+          if (attempt && typeof attempt.catch === 'function') attempt.catch(() => { /* autoplay blocked; a view offers a play button */ })
+        }
+        ctx.effect(() => {
+          const unsubscribe = playerStore.subscribe(syncAudio)
+          syncAudio(playerStore.get())
+          return () => unsubscribe()
+        }, 'dsh-lx-geteer: audio session sync')
 
         // Poll the Host player state; a new ready revision opens/focuses the
         // player tab and the tab's own effect starts playback.
