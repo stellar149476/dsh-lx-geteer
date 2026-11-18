@@ -762,6 +762,21 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         setCoverRatio(0)
       }, [player && player.cover])
+      /**
+       * Cover art: Kugou serves plain http, which the secure desktop shell drops
+       * as mixed content. Try the https form first and fall back to the host
+       * proxy once if that fails.
+       */
+      const [coverProxy, setCoverProxy] = React.useState(false)
+      React.useEffect(() => {
+        setCoverProxy(false)
+      }, [player && player.cover])
+      const rawCover = player && player.cover ? String(player.cover) : ''
+      const coverSrc = rawCover
+        ? (coverProxy
+          ? absAppPath(`/lx-geteer-cover?url=${encodeURIComponent(rawCover)}`)
+          : rawCover.replace(/^http:\/\//i, 'https://'))
+        : ''
       const token = player && player.token ? player.token : ''
       const src = token ? absAppPath(`/lx-geteer-stream?id=${encodeURIComponent(token)}`) : ''
 
@@ -941,6 +956,7 @@ window.__ModuleLoader__.load({
           linear-gradient(180deg, rgba(12,10,20,.12), rgba(12,10,20,.72) 72%, #0c0a13); }
         .lxgp-body { position:relative; z-index:1; display:flex; flex-direction:column; gap:13px; }
         .lxgp-card { position:relative; width:100%; aspect-ratio:1/1; max-height:340px; border-radius:24px; overflow:hidden; background:linear-gradient(140deg,#241d3d,#141021); box-shadow:0 14px 40px rgba(0,0,0,.5), 0 0 26px rgba(255,111,165,.22), 0 0 0 1px rgba(255,255,255,.09); }
+        .lxgp-card-empty { display:flex; align-items:center; justify-content:center; color:rgba(244,241,255,.55); }
         .lxgp-card img { width:100%; height:100%; object-fit:contain; display:block; transform:scale(1); transition:transform .7s ease; }
         .lxgp-card-bg { position:absolute; inset:-14px; background-size:cover; background-position:center; filter:blur(22px) brightness(.45) saturate(1.2); }
         .lxgp-card:hover img { transform:scale(1.06); }
@@ -1017,25 +1033,25 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'lxgp' }, css,
-        player.cover ? h('div', {
+        coverSrc ? h('div', {
           className: 'lxgp-bg',
-          style: { backgroundImage: `url("${player.cover}")` },
+          style: { backgroundImage: `url("${coverSrc}")` },
         }) : null,
         h('div', { className: 'lxgp-veil' }),
         h('div', { className: 'lxgp-body' },
           h('div', {
-            className: 'lxgp-card',
+            className: coverSrc ? 'lxgp-card' : 'lxgp-card lxgp-card-empty',
             style: { aspectRatio: coverRatio > 0 && Number.isFinite(coverRatio) ? String(coverRatio) : '1 / 1' },
           },
-            player.cover ? h('div', {
+            coverSrc ? h('div', {
               className: 'lxgp-card-bg',
-              style: { backgroundImage: `url("${player.cover}")` },
+              style: { backgroundImage: `url("${coverSrc}")` },
             }) : null,
             h('div', { className: 'lxgp-ring' }),
             h('div', { className: 'lxgp-spark' }, '✦'),
-            player.cover
+            coverSrc
               ? h('img', {
-                src: player.cover,
+                src: coverSrc,
                 alt: '',
                 referrerPolicy: 'no-referrer',
                 onLoad: (event) => {
@@ -1044,7 +1060,16 @@ window.__ModuleLoader__.load({
                     setCoverRatio(image.naturalWidth / image.naturalHeight)
                   }
                 },
-                onError: (e) => { e.currentTarget.style.display = 'none' },
+                onError: (event) => {
+                  // Direct https upgrade failed (some CDNs only answer the
+                  // http origin, others want a referer): fall back to the host
+                  // proxy, then give up and show the placeholder.
+                  if (!coverProxy) {
+                    setCoverProxy(true)
+                    return
+                  }
+                  event.currentTarget.style.display = 'none'
+                },
               })
               : h(Icon, { name: 'note', size: 46 }),
           ),

@@ -818,6 +818,49 @@ export function apply(ctx) {
     },
   }), 'dsh-lx-geteer: /lx-geteer-stream')
 
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/lx-geteer-cover',
+    async handler(req, res) {
+      req.on('error', () => {})
+      res.on('error', () => {})
+      if (!isTrustedRequest(req)) {
+        try {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('仅允许同源页面访问')
+        } catch {
+          /* socket already gone */
+        }
+        return
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        try {
+          res.writeHead(405, { Allow: 'GET, HEAD' })
+          res.end()
+        } catch {
+          /* socket already gone */
+        }
+        return
+      }
+      try {
+        const url = new URL(req.url || '/', 'http://localhost')
+        await playerHub.cover(url.searchParams.get('url'), req, res)
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error)
+        try {
+          if (res.destroyed) return
+          if (res.headersSent) res.destroy()
+          else {
+            res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
+            res.end(`封面代理失败：${message}`)
+          }
+        } catch {
+          /* socket already gone */
+        }
+      }
+    },
+  }), 'dsh-lx-geteer: /lx-geteer-cover')
+
   const systemPrompt = ctx.get('systemPrompt')
   if (systemPrompt && typeof systemPrompt.section === 'function') {
     ctx.effect(() => systemPrompt.section({
